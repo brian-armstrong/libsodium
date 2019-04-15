@@ -397,8 +397,8 @@ int
 crypto_core_salsa20(unsigned char *out, const unsigned char *in,
                     const unsigned char *k, const unsigned char *c)
 {
-    crypto_core_salsa(out, in, k, c, 20);
-    // crypto_core_salsa_sse(out, in, k, c, 20);
+    // crypto_core_salsa(out, in, k, c, 20);
+    crypto_core_salsa_sse(out, in, k, c, 20);
     return 0;
 }
 
