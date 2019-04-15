@@ -6,6 +6,8 @@ Public domain.
 
 #include "api.h"
 
+#include <x86intrin.h>
+
 #define ROUNDS 20
 
 typedef unsigned int uint32;
@@ -33,6 +35,7 @@ static void store_littleendian(unsigned char *x,uint32 u)
   x[3] = u;
 }
 
+/*
 int crypto_core(
         unsigned char *out,
   const unsigned char *in,
@@ -105,4 +108,225 @@ int crypto_core(
   store_littleendian(out + 28,x9);
 
   return 0;
+}
+*/
+
+int crypto_core(
+        unsigned char *out,
+  const unsigned char *in,
+  const unsigned char *k,
+  const unsigned char *c
+)
+{
+    int i;
+    __m128i T0, T1, T2, T3, T4, T5, T6, T7, X0, X1, X2, X3, Y0, Y1, Y2, Y3;
+
+    // T0 = [  x0 |  x5 | x10 | x15 ] (load c || load constants)
+    // T1 = [  x1 |  x2 |  x3 |  x4 ] (load k)
+    // T2 = [ x11 | x12 | x13 | x14 ] (load k + 16)
+    // T3 = [  x6 |  x7 |  x8 |  x9 ] (load in)
+
+    if (c == NULL) {
+        T0 = _mm_set_epi32(0x6b206574, 0x79622d32, 0x3320646e, 0x61707865);
+    } else {
+        T0 = _mm_load_si128((const __m128i *)(c));
+    }
+
+    T1 = _mm_load_si128((const __m128i *)(k));
+    T2 = _mm_load_si128((const __m128i *)(k) + 1);
+    T3 = _mm_load_si128((const __m128i *)(in));
+
+    // T0 = [  x0 |  x5 | x10 | x15 ] (copy t0)
+    // T1 = [  x4 |  x1 |  x2 |  x3 ] (shuffle t1)
+    // T2 = [ x12 | x13 | x14 | x11 ] (shuffle t2)
+    // T3 = [  x8 |  x9 |  x6 |  x7 ] (shuffle t3)
+
+    T5 = _mm_set_epi32(0x0b0a0908, 0x07060504, 0x03020100, 0x0f0e0d0c);
+    T6 = _mm_set_epi32(0x03020100, 0x0f0e0d0c, 0x0b0a0908, 0x07060504);
+    T7 = _mm_set_epi32(0x07060504, 0x03020100, 0x0f0e0d0c, 0x0b0a0908);
+
+    T1 = _mm_shuffle_epi8(T1, T5);
+    T2 = _mm_shuffle_epi8(T2, T6);
+    T3 = _mm_shuffle_epi8(T3, T7);
+
+    // X <- T
+
+    X0 = T0;
+    X1 = T1;
+    X2 = T2;
+    X3 = T3;
+
+    // X0 = [  x0 |  x5 | x10 | x15 ] (nop)
+    // X1 = [  x4 |  x9 |  x2 |  x3 ] (select t3[1])
+    // X2 = [ x12 |  x1 | x14 | x11 ] (select t1[1])
+    // X3 = [  x8 | x13 |  x6 |  x7 ] (select t2[1])
+
+    X1 = _mm_blend_epi16(X1, T3, 0x0c);
+    X2 = _mm_blend_epi16(X2, T1, 0x0c);
+    X3 = _mm_blend_epi16(X3, T2, 0x0c);
+
+    // X0 = [  x0 |  x5 | x10 | x15 ] (nop)
+    // X1 = [  x4 |  x9 | x14 |  x3 ] (select t2[2])
+    // X2 = [ x12 |  x1 |  x6 | x11 ] (select t3[2])
+    // X3 = [  x8 | x13 |  x2 |  x7 ] (select t1[2])
+
+    X1 = _mm_blend_epi16(X1, T2, 0x30);
+    X2 = _mm_blend_epi16(X2, T3, 0x30);
+    X3 = _mm_blend_epi16(X3, T1, 0x30);
+
+    for (i = ROUNDS;i > 0;i -= 2) {
+        // X0 = [  x0 |  x5 | x10 | x15 ] (nop)
+        // X1 = [  x4 |  x9 | x14 |  x3 ] (nop)
+        // X2 = [ x12 |  x1 |  x6 | x11 ] (nop)
+        // X3 = [  x8 | x13 |  x2 |  x7 ] (nop)
+
+        // t0 = X0 + X2
+        // t4 = sll(t0, 7)
+        // t0 = srl(t0, 32 - 7)
+        // t4 = or(t0, t4)
+        // X1 ^= t4
+
+        T0 = _mm_add_epi32(X0, X2);
+        T4 = _mm_slli_epi32(T0, 7);
+        T0 = _mm_srli_epi32(T0, 32 - 7);
+        T4 = _mm_or_si128(T0, T4);
+        X1 = _mm_xor_si128(X1, T4);
+
+        // t1 = X1 + X0
+        // t5 = sll(t1, 9)
+        // t1 = srl(t1, 32 - 9)
+        // t5 = or(t1, t5)
+        // X3 ^= t5
+
+        T1 = _mm_add_epi32(X1, X0);
+        T5 = _mm_slli_epi32(T1, 9);
+        T1 = _mm_srli_epi32(T1, 32 - 9);
+        T5 = _mm_or_si128(T1, T5);
+        X3 = _mm_xor_si128(X3, T5);
+
+        // t2 = X3 + X1
+        // t6 = sll(t2, 13)
+        // t2 = srl(t2, 32 - 13)
+        // t6 = or(t2, t6)
+        // X2 ^= t6
+
+        T2 = _mm_add_epi32(X3, X1);
+        T6 = _mm_slli_epi32(T2, 13);
+        T2 = _mm_srli_epi32(T2, 32 - 13);
+        T6 = _mm_or_si128(T2, T6);
+        X2 = _mm_xor_si128(X2, T6);
+
+        // t3 = X2 + X3
+        // t7 = sll(t3, 18)
+        // t3 = srl(t3, 32 - 18)
+        // t7 = or(t3, t7)
+        // X0 ^= t7
+
+        T3 = _mm_add_epi32(X2, X3);
+        T7 = _mm_slli_epi32(T3, 18);
+        T3 = _mm_srli_epi32(T3, 32 - 18);
+        T7 = _mm_or_si128(T3, T7);
+        X0 = _mm_xor_si128(X0, T7);
+
+        // X0 = [  x0 |  x5 | x10 | x15 ] (nop)
+        // X1 = [  x3 |  x4 |  x9 | x14 ] (shuffle X1)
+        // X2 = [  x1 |  x6 | x11 | x12 ] (shuffle X2)
+        // X3 = [  x2 |  x7 |  x8 | x13 ] (shuffle X3)
+
+        T1 = _mm_set_epi32(0x0b0a0908, 0x07060504, 0x03020100, 0x0f0e0d0c);
+        T2 = _mm_set_epi32(0x03020100, 0x0f0e0d0c, 0x0b0a0908, 0x07060504);
+        T3 = _mm_set_epi32(0x07060504, 0x03020100, 0x0f0e0d0c, 0x0b0a0908);
+
+        X1 = _mm_shuffle_epi8(X1, T1);
+        X2 = _mm_shuffle_epi8(X2, T2);
+        X3 = _mm_shuffle_epi8(X3, T3);
+
+        // t0 = X0 + X1
+        // t4 = sll(t0, 7)
+        // t0 = srl(t0, 32 - 7)
+        // t4 = or(t0, 4)
+        // X2 ^= t4
+
+        T0 = _mm_add_epi32(X0, X1);
+        T4 = _mm_slli_epi32(T0, 7);
+        T0 = _mm_srli_epi32(T0, 32 - 7);
+        T4 = _mm_or_si128(T0, T4);
+        X2 = _mm_xor_si128(X2, T4);
+
+        // t1 = X2 + X0
+        // t5 = sll(t1, 9)
+        // t1 = srl(t1, 32 - 9)
+        // t5 = or(t1, t5)
+        // X3 ^= t5
+
+        T1 = _mm_add_epi32(X2, X0);
+        T5 = _mm_slli_epi32(T1, 9);
+        T1 = _mm_srli_epi32(T1, 32 - 9);
+        T5 = _mm_or_si128(T1, T5);
+        X3 = _mm_xor_si128(X3, T5);
+
+        // t2 = X3 + X2
+        // t6 = sll(t2, 13)
+        // t2 = srl(t2, 32 - 13)
+        // t6 = or(t2, t6)
+        // X1 ^= t6
+
+        T2 = _mm_add_epi32(X3, X2);
+        T6 = _mm_slli_epi32(T2, 13);
+        T2 = _mm_srli_epi32(T2, 32 - 13);
+        T6 = _mm_or_si128(T2, T6);
+        X1 = _mm_xor_si128(X1, T6);
+
+        // t3 = X1 + X3
+        // t7 = sll(t3, 18)
+        // t3 = srl(t3, 32 - 18)
+        // t7 = or(t3, t7)
+        // X0 ^= t7
+
+        T3 = _mm_add_epi32(X1, X3);
+        T7 = _mm_slli_epi32(T3, 18);
+        T3 = _mm_srli_epi32(T3, 32 - 18);
+        T7 = _mm_or_si128(T3, T7);
+        X0 = _mm_xor_si128(X0, T7);
+
+        // X0 = [  x0 |  x5 | x10 | x15 ] (nop)
+        // X1 = [  x4 |  x9 | x14 |  x3 ] (shuffle X1)
+        // X2 = [ x12 |  x1 |  x6 | x11 ] (shuffle X2)
+        // X3 = [  x8 | x13 |  x2 |  x7 ] (shuffle X3)
+
+        T1 = _mm_set_epi32(0x03020100, 0x0f0e0d0c, 0x0b0a0908, 0x07060504);
+        T2 = _mm_set_epi32(0x0b0a0908, 0x07060504, 0x03020100, 0x0f0e0d0c);
+        T3 = _mm_set_epi32(0x07060504, 0x03020100, 0x0f0e0d0c, 0x0b0a0908);
+
+        X1 = _mm_shuffle_epi8(X1, T1);
+        X2 = _mm_shuffle_epi8(X2, T2);
+        X3 = _mm_shuffle_epi8(X3, T3);
+    }
+
+    // Y0 = [  x0 |  x5 | x10 | x15 ] (copy X0)
+    // Y1 = [  x8 | x13 |  x2 |  x7 ] (copy X3)
+
+    Y0 = X0;
+    Y1 = X3;
+
+    // Y0 = [  x0 |  x5 | x10 | x15 ] (nop)
+    // Y1 = [  x8 |  x9 |  x2 |  x7 ] (select X1[1])
+
+    Y1 = _mm_blend_epi16(Y1, X1, 0x0c);
+
+    // Y0 = [  x0 |  x5 | x10 | x15 ] (nop)
+    // Y1 = [  x8 |  x9 |  x6 |  x7 ] (select X2[2])
+
+    Y1 = _mm_blend_epi16(Y1, X2, 0x30);
+
+    // Y0 = [  x0 |  x5 | x10 | x15 ] (nop)
+    // Y1 = [  x6 |  x7 |  x8 |  x9 ] (shuffle)
+
+    T1 = _mm_set_epi32(0x07060504, 0x03020100, 0x0f0e0d0c, 0x0b0a0908);
+    Y1 = _mm_shuffle_epi8(Y1, T1);
+
+    _mm_store_si128((__m128i *)(out) + 0, Y0);
+    _mm_store_si128((__m128i *)(out) + 1, Y1);
+
+    return 0;
 }
