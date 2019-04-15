@@ -129,12 +129,12 @@ int crypto_core(
     if (c == NULL) {
         T0 = _mm_set_epi32(0x6b206574, 0x79622d32, 0x3320646e, 0x61707865);
     } else {
-        T0 = _mm_load_si128((const __m128i *)(c));
+        T0 = _mm_loadu_si128((const __m128i *)(c));
     }
 
-    T1 = _mm_load_si128((const __m128i *)(k));
-    T2 = _mm_load_si128((const __m128i *)(k) + 1);
-    T3 = _mm_load_si128((const __m128i *)(in));
+    T1 = _mm_loadu_si128((const __m128i *)(k));
+    T2 = _mm_loadu_si128((const __m128i *)(k) + 1);
+    T3 = _mm_loadu_si128((const __m128i *)(in));
 
     // T0 = [  x0 |  x5 | x10 | x15 ] (copy t0)
     // T1 = [  x4 |  x1 |  x2 |  x3 ] (shuffle t1)
@@ -325,8 +325,8 @@ int crypto_core(
     T1 = _mm_set_epi32(0x07060504, 0x03020100, 0x0f0e0d0c, 0x0b0a0908);
     Y1 = _mm_shuffle_epi8(Y1, T1);
 
-    _mm_store_si128((__m128i *)(out) + 0, Y0);
-    _mm_store_si128((__m128i *)(out) + 1, Y1);
+    _mm_storeu_si128((__m128i *)(out) + 0, Y0);
+    _mm_storeu_si128((__m128i *)(out) + 1, Y1);
 
     return 0;
 }
